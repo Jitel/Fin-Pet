@@ -1,0 +1,491 @@
+Yura Yeustratchik, [07.10.18 16:41]
+pragma solidity 0.4.25;
+
+library SafeMath {
+    function mul(uint256 a, uint256 b) internal pure returns (uint256) {
+        if (a == 0) {
+            return 0;
+        }
+        uint256 c = a * b;
+        assert(c / a == b);
+        return c;
+    }
+
+    function div(uint256 a, uint256 b) internal pure returns (uint256) {
+        // assert(b > 0); // Solidity automatically throws when dividing by 0
+        uint256 c = a / b;
+        // assert(a == b * c + a % b); // There is no case in which this doesn't hold
+        return c;
+    }
+
+    function sub(uint256 a, uint256 b) internal pure returns (uint256) {
+        assert(b <= a);
+        return a - b;
+    }
+
+    function add(uint256 a, uint256 b) internal pure returns (uint256) {
+        uint256 c = a + b;
+        assert(c >= a);
+        return c;
+    }
+}
+
+contract Ownable {
+    address public owner;
+
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+
+    /
+     * @dev The Ownable constructor sets the original `owner` of the contract to the sender
+     * account.
+     */
+    constructor() public {
+        owner = msg.sender;
+    }
+
+    /
+     * @dev Throws if called by any account other than the owner.
+     */
+    modifier onlyOwner() {
+        require(msg.sender == owner);
+        _;
+    }
+
+    /
+     * @dev Allows the current owner to transfer control of the contract to a newOwner.
+     * @param _newOwner The address to transfer ownership to.
+     */
+    function transferOwnership(address _newOwner) external onlyOwner {
+        require(_newOwner != address(0));
+        emit OwnershipTransferred(owner, _newOwner);
+        owner = _newOwner;
+    }
+
+}
+
+
+
+interface tokenRecipient {
+    function receiveApproval(address _from, address _token, uint _value, bytes _extraData) external;
+}
+
+
+contract ERC721 {
+    function implementsERC721() public pure returns (bool);
+    function totalSupply() public view returns (uint256);
+    function balanceOf(address _owner) public view returns (uint256 );
+    function ownerOf(uint256 _tokenId) public view returns (address);
+    function approve(address _to, uint256 _tokenId) public returns (bool);
+    function transferFrom(address _from, address _to, uint256 _tokenId) public returns (bool);
+    function transfer(address _to, uint256 _tokenId) public returns (bool);
+    event Transfer(address indexed from, address indexed to, uint256 indexed tokenId);
+    event Approval(address indexed owner, address indexed approved, uint256 indexed tokenId);
+
+    // Optional
+    //function name() public view returns (string);
+    //function symbol() public view returns (string);
+   // function tokensOfOwner(address _owner) external view returns (uint256[]);
+    // function tokenMetadata(uint256 _tokenId) public view returns (string infoUrl);
+
+    function owns(address _claimant, uint256 _tokenId) public view returns (bool);
+}
+
+
+
+contract PetBase is ERC721, Ownable {
+    using SafeMath for uint;
+
+    struct Pet {
+        uint weight;
+        uint daring;
+        uint cute;
+        uint birth;
+    }
+
+    event NewPet(address indexed owner, uint256 petId);
+
+    // Total amount of pets
+    uint256 private totalPets;
+
+    // Incremental counter of pets Id
+    uint256 private lastPetId;
+
+    //Mapping from pet ID to Pet struct
+    mapping(uint256 => Pet) public pets;
+
+    // Mapping from pet ID to owner
+    mapping(uint256 => address) private petOwner;
+
+    // Mapping from pet ID to approved address
+    mapping(uint256 => address) private petApprovals;
+
+    // Mapping from owner to list of owned pets IDs
+    mapping(address => uint256[]) private ownedPets;
+
+    // Mapping from pet ID to index of the owner pets list
+    // т.е. ID земли => порядковый номер в списке владельца
+    mapping(uint256 => uint256) private ownedPetsIndex;
+
+
+    modifier onlyOwnerOf(uint256 _tokenId) {
+        require(owns(msg.sender, _tokenId), "wrong owner");
+        _;
+    }
+
+    /
+    * @dev Gets the owner of the specified pet ID
+    * @param _tokenId uint256 ID of the pet to query the owner of
+
+Yura Yeustratchik, [07.10.18 16:41]
+* @return owner address currently marked as the owner of the given pet ID
+    */
+    function ownerOf(uint256 _tokenId) public view returns (address) {
+        return petOwner[_tokenId];
+    }
+
+    function totalSupply() public view returns (uint256) {
+        return totalPets;
+    }
+
+    /
+    * @dev Gets the balance of the specified address
+    * @param _owner address to query the balance of
+    * @return uint256 representing the amount owned by the passed address
+    */
+    function balanceOf(address _owner) public view returns (uint256) {
+        return ownedPets[_owner].length;
+    }
+
+    /
+    * @dev Gets the list of pets owned by a given address
+    * @param _owner address to query the pets of
+    * @return uint256[] representing the list of pets owned by the passed address
+    */
+    function tokensOfOwner(address _owner) external view returns (uint256[]) {
+        return ownedPets[_owner];
+    }
+
+    /
+    * @dev Gets the approved address to take ownership of a given pet ID
+    * @param _tokenId uint256 ID of the pet to query the approval of
+    * @return address currently approved to take ownership of the given pet ID
+    */
+    function approvedFor(uint256 _tokenId) public view returns (address) {
+        return petApprovals[_tokenId];
+    }
+
+    /
+    * @dev Tells whether the msg.sender is approved for the given pet ID or not
+    * This function is not private so it can be extended in further implementations like the operatable ERC721
+    * @param _owner address of the owner to query the approval of
+    * @param _tokenId uint256 ID of the pet to query the approval of
+    * @return bool whether the msg.sender is approved for the given pet ID or not
+    */
+    function allowance(address _owner, uint256 _tokenId) public view returns (bool) {
+        return approvedFor(_tokenId) == _owner;
+    }
+
+    /
+    * @dev Approves another address to claim for the ownership of the given pet ID
+    * @param _to address to be approved for the given pet ID
+    * @param _tokenId uint256 ID of the pet to be approved
+    */
+    function approve(address _to, uint256 _tokenId) public onlyOwnerOf(_tokenId) returns (bool) {
+        require(_to != msg.sender, "_to == msg.sender");
+        if (approvedFor(_tokenId) != address(0) || _to != address(0)) {
+            petApprovals[_tokenId] = _to;
+            emit Approval(msg.sender, _to, _tokenId);
+            return true;
+        }
+    }
+
+
+    function approveAndCall(address _spender, uint256 _tokenId, bytes _extraData) public returns (bool) {
+        tokenRecipient spender = tokenRecipient(_spender);
+        if (approve(_spender, _tokenId)) {
+            spender.receiveApproval(msg.sender, this, _tokenId, _extraData);
+            return true;
+        }
+    }
+
+
+
+    /
+    * @dev Claims the ownership of a given pet ID
+    * @param _tokenId uint256 ID of the pet being claimed by the msg.sender
+    */
+    function takeOwnership(uint256 _tokenId) public {
+        require(allowance(msg.sender, _tokenId), "not allowed");
+        clearApprovalAndTransfer(ownerOf(_tokenId), msg.sender, _tokenId);
+    }
+
+    /
+    * @dev Transfers the ownership of a given pet ID to another address
+    * @param _to address to receive the ownership of the given pet ID
+    * @param _tokenId uint256 ID of the pet to be transferred
+    */
+    function transfer(address _to, uint256 _tokenId) public onlyOwnerOf(_tokenId) returns (bool) {
+        clearApprovalAndTransfer(msg.sender, _to, _tokenId);
+        return true;
+    }
+
+
+    /
+    * @dev Internal function to clear current approval and transfer the ownership of a given pet ID
+    * @param _from address which you want to send pets from
+    * @param _to address which you want to transfer the pet to
+    * @param _tokenId uint256 ID of the pet to be transferred
+    */
+    function clearApprovalAndTransfer(address _from, address _to, uint256 _tokenId) internal {
+        require(owns(_from, _tokenId), "wrong owner");
+        require(_to != address(0), "address 0");
+        require(_to != ownerOf(_tokenId), "_to == owner");
+
+Yura Yeustratchik, [07.10.18 16:41]
+clearApproval(_from, _tokenId);
+        removePet(_from, _tokenId);
+        addPet(_to, _tokenId);
+        emit Transfer(_from, _to, _tokenId);
+    }
+
+    /
+    * @dev Internal function to clear current approval of a given pet ID
+    * @param _tokenId uint256 ID of the pet to be transferred
+    */
+    function clearApproval(address _owner, uint256 _tokenId) private {
+        require(owns(_owner, _tokenId), "wrong owner");
+        petApprovals[_tokenId] = address(0);
+        emit Approval(_owner, address(0), _tokenId);
+    }
+
+    /
+    * @dev Internal function to add a pet ID to the list of a given address
+    * @param _to address representing the new owner of the given pet ID
+    * @param _tokenId uint256 ID of the pet to be added to the pets list of the given address
+    */
+    function addPet(address _to, uint256 _tokenId) private {
+        require(petOwner[_tokenId] == address(0), "address 0");
+        petOwner[_tokenId] = _to;
+
+        uint256 length = ownedPets[_to].length;
+        ownedPets[_to].push(_tokenId);
+        ownedPetsIndex[_tokenId] = length;
+        totalPets = totalPets.add(1);
+    }
+
+    /**
+    * @dev Internal function to remove a pet ID from the list of a given address
+    * @param _from address representing the previous owner of the given pet ID
+    * @param _tokenId uint256 ID of the pet to be removed from the pets list of the given address
+    */
+    function removePet(address _from, uint256 _tokenId) private {
+        require(owns(_from, _tokenId), "wrong owner");
+
+        uint256 petIndex = ownedPetsIndex[_tokenId];
+        //        uint256 lastPetIndex = balanceOf(_from).sub(1);
+        uint256 lastPetIndex = ownedPets[_from].length.sub(1);
+        uint256 lastPet = ownedPets[_from][lastPetIndex];
+
+        petOwner[_tokenId] = address(0);
+        ownedPets[_from][petIndex] = lastPet;
+        ownedPets[_from][lastPetIndex] = 0;
+        // Note that this will handle single-element arrays. In that case, both petIndex and lastPetIndex are going to
+        // be zero. Then we can make sure that we will remove _tokenId from the ownedPets list since we are first swapping
+        // the lastPet to the first position, and then dropping the element placed in the last position of the list
+
+        ownedPets[_from].length--;
+        ownedPetsIndex[_tokenId] = 0;
+        ownedPetsIndex[lastPet] = petIndex;
+        totalPets = totalPets.sub(1);
+    }
+
+
+    function _createPet(address _owner) internal returns (uint) {
+        require(_owner != address(0), "address 0");
+        uint256 _tokenId = lastPetId++;
+
+        addPet(_owner, _tokenId);
+        //store new pet data
+        pets[_tokenId] = Pet({
+            weight : 0,
+            daring : 0,
+            cute : 0,
+            birth : now
+            });
+        emit Transfer(address(0), _owner, _tokenId);
+        emit NewPet(_owner, _tokenId);
+        return _tokenId;
+    }
+
+
+    function owns(address _claimant, uint256 _tokenId) public view returns (bool) {
+        return ownerOf(_tokenId) == _claimant && ownerOf(_tokenId) != address(0);
+    }
+
+
+    function transferFrom(address _from, address _to, uint256 _tokenId) public returns (bool) {
+        require(_to != address(this), "U can't send to this contract addr");
+        require(allowance(msg.sender, _tokenId), "token not allowed");
+        clearApprovalAndTransfer(_from, _to, _tokenId);
+        return true;
+    }
+
+}
+
+
+contract FinPet is PetBase {
+    string public name = "FinPet";
+    string public symbol = "FPT";
+
+    FundInterface public fund;
+
+    struct Food {
+        uint price;
+        uint weight;
+        uint daring;
+        uint cute;
+        bool exists;
+    }
+
+    mapping (uint => Food) public foods;
+    uint public foodCount;
+
+    address public wallet;
+
+
+    constructor(address _wallet) public {
+        require(_wallet != address(0), "address 0");
+        wallet = _wallet;
+    }
+
+
+    function() public payable{
+        revert();
+    }
+
+Yura Yeustratchik, [07.10.18 16:41]
+function donate(uint _finishTime, uint _maxValue) public payable {
+        require(msg.value > 0, "wrong value");
+        require(_finishTime == 0 || _maxValue == 0, "Only one variable can > 0");
+        uint petId = _createPet(msg.sender);
+        wallet.transfer(msg.value);
+        require(fund.addPet.value(msg.value)(petId, _finishTime, _maxValue), "can't addPet to fund");
+    }
+
+
+    function addFood(uint _price, uint _weight, uint _daring, uint _cute) onlyOwner public {
+        foodCount++;
+        foods[foodCount].price = _price;
+        foods[foodCount].weight = _weight;
+        foods[foodCount].daring = _daring;
+        foods[foodCount].cute = _cute;
+        foods[foodCount].exists = true;
+    }
+
+
+    function editFood(uint _food, uint _price, uint _weight, uint _daring, uint _cute) onlyOwner public {
+        require(foods[_food].exists, "Food doesn't exists");
+        foods[foodCount].price = _price;
+        foods[foodCount].weight = _weight;
+        foods[foodCount].daring = _daring;
+        foods[foodCount].cute = _cute;
+    }
+
+
+    function feedPet(uint _pet, uint _food) onlyOwnerOf(_pet) public payable {
+        require(foods[_food].exists, "Food doesn't exists");
+        require(msg.value == foods[_food].price, "Wrong eth value for food");
+        _feedPet(_pet, _food);
+        require(fund.addBalance.value(msg.value)(_pet), "can't addBalance");
+    }
+
+
+    function _feedPet(uint _pet, uint _food) internal {
+        pets[_pet].weight = pets[_pet].weight.add(foods[_food].weight);
+        pets[_pet].daring = pets[_pet].daring.add(foods[_food].daring);
+        pets[_pet].cute   = pets[_pet].cute.add(foods[_food].cute);
+    }
+
+
+    function setFund(address _fund) onlyOwner external {
+        require(_fund != address(0), "address 0");
+        fund = FundInterface(_fund);
+    }
+
+
+    function implementsERC721() public pure returns (bool) {
+        return true;
+    }
+}
+
+
+interface FundInterface {
+    function addPet(uint _pet, uint _finishTime, uint _maxValue) external payable returns (bool);
+    function addBalance(uint _pet) external payable returns (bool);
+}
+
+contract Fund is Ownable {
+    using SafeMath for uint;
+
+    struct Deposit{
+        uint finishTime;
+        uint maxValue;
+        uint balance;
+        bool exists;
+    }
+
+    mapping (uint => Deposit) pets;
+
+    address public petAddress;
+
+
+    modifier onlyPetContract() {
+        require(msg.sender == petAddress, "wrong petAddress");
+        _;
+    }
+
+    constructor(address _petAddress) public {
+        require(_petAddress != address(0));
+        petAddress = _petAddress;
+    }
+
+
+    function() public payable {
+        revert();
+    }
+
+
+    function addPet(uint _pet, uint _finishTime, uint _maxValue) onlyPetContract external payable returns (bool) {
+        require(!pets[_pet].exists, "pet exists");
+        require(_finishTime == 0 || _maxValue == 0, "Only one variable can > 0");
+        pets[_pet].finishTime = _finishTime;
+        pets[_pet].maxValue = _maxValue;
+        pets[_pet].balance = msg.value;
+        pets[_pet].exists = true;
+        return true;
+    }
+
+
+    function addBalance(uint _pet) onlyPetContract external payable returns (bool) {
+        require(pets[_pet].exists, "pet not exists");
+        pets[_pet].balance = pets[_pet].balance.add(msg.value);
+        return true;
+    }
+
+
+    function withdraw(uint _pet) public {
+        require(pets[_pet].exists, "pet not exists");
+        require(ERC721(petAddress).owns(msg.sender, _pet), "wrong owner");
+
+        if (pets[_pet].finishTime > 0) {
+            require(pets[_pet].finishTime > now, "not finished");
+        } else {
+            require(pets[_pet].maxValue >= pets[_pet].balance, "not enough balance");
+        }
+
+        uint val = pets[_pet].balance;
+        pets[_pet].balance = 0;
+        msg.sender.transfer(val);
+    }
+
+}
